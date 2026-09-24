@@ -45,17 +45,9 @@ CFTTL=60
 # Ignore local file, update ip anyway
 FORCE=false
 
-WANIPSITE="http://ipv4.icanhazip.com"
-
-# Site to retrieve WAN ip, other examples are: bot.whatismyipaddress.com, https://api.ipify.org/ ...
-if [ "$CFRECORD_TYPE" = "A" ]; then
-  :
-elif [ "$CFRECORD_TYPE" = "AAAA" ]; then
-  WANIPSITE="http://ipv6.icanhazip.com"
-else
-  echo "$CFRECORD_TYPE specified is invalid, CFRECORD_TYPE can only be A(for IPv4)|AAAA(for IPv6)"
-  exit 2
-fi
+# Site to retrieve WAN ip. ip.guide returns JSON like: { "ip": "1.2.3.4", ... }
+# It has no separate v4/v6 hostnames, the address family is forced with curl -4/-6
+WANIPSITE="https://ip.guide/"
 
 # get parameter
 while getopts k:h:z:t:f: opts; do
@@ -67,6 +59,16 @@ while getopts k:h:z:t:f: opts; do
     f) FORCE=${OPTARG} ;;
   esac
 done
+
+# Validate record type and pick the WAN ip address family accordingly
+case "$CFRECORD_TYPE" in
+  A)    CURL_FAMILY="-4" ;;
+  AAAA) CURL_FAMILY="-6" ;;
+  *)
+    echo "$CFRECORD_TYPE specified is invalid, CFRECORD_TYPE can only be A(for IPv4)|AAAA(for IPv6)"
+    exit 2
+    ;;
+esac
 
 # If required settings are missing just exit
 if [ "$CF_API_TOKEN" = "" ]; then
@@ -87,7 +89,11 @@ if [ "$CFRECORD_NAME" != "$CFZONE_NAME" ] && ! [ -z "${CFRECORD_NAME##*$CFZONE_N
 fi
 
 # Get current and old WAN ip
-WAN_IP=`curl -s ${WANIPSITE}`
+WAN_IP=`curl -sS $CURL_FAMILY --max-time 30 ${WANIPSITE} | grep -Eo '"ip": *"[^"]*' | sed 's/.*"ip": *"//' | head -1` || true
+if [ -z "$WAN_IP" ]; then
+  echo "Could not retrieve WAN IP from ${WANIPSITE} (IPv${CURL_FAMILY#-} connectivity required)"
+  exit 2
+fi
 WAN_IP_FILE=$HOME/.cf-wan_ip_$CFRECORD_NAME.txt
 if [ -f $WAN_IP_FILE ]; then
   OLD_WAN_IP=`cat $WAN_IP_FILE`
